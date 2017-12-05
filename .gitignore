@@ -1,0 +1,8 @@
+*ckpt*
+*.swo
+*.p
+*.png
+*.pyc
+*.swp
+_*
+
