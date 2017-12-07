@@ -5,7 +5,9 @@ import random
 from subsample import *
 from utils import preprocess, get_random_pong_state
 
-def state_processor1(states):
+# take in a trace prefix and return the state (for the last 2 or somting liek that)
+def state_processor1(trace_prefix):
+  states = [tr[0] for tr in trace_prefix]
   if len(states) < 2:
     # return np.zeros([800+100*2])
     return np.zeros([100*2])
@@ -25,13 +27,13 @@ def state_processor1(states):
   # return together_with_prev
   return together_flat
 
+proc1 = StatesProccessor(200, state_processor1)
+action_decoder = ActionDecoder([2,3])
+
 env = gym.envs.atari.atari_env.AtariEnv(obs_type='image', frameskip=2)
 start_state = env.clone_full_state()
 
-state_dim = 200
-action_dim = 2
-collector = TraceGenerator(env, [2,3])
-stateless_agent = StatelessAgent("bob", state_dim, action_dim)
+stateless_agent = StatelessAgent("bob",proc1, action_decoder)
 
 ctr = 0
 times_explore = 10
@@ -48,9 +50,8 @@ while True:
 #  stateless_agent.learn_supervised(planner_sa)
 
   # create a batch of trace in it
-  agent_trace_batch = [collector.generate_trace(stateless_agent, state_processor1, 
-                                                # get_random_pong_state(env, start_state),
-                                                start_state,
+  agent_trace_batch = [generate_trace(env, stateless_agent,
+                                                get_random_pong_state(env, start_state),
                                                 do_render = do_render)
                        for _ in range(times_explore)]
 

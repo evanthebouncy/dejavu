@@ -35,39 +35,57 @@ def normalize_trace_batch(trace_batch):
   assert 0
   return ret
 
-def get_action_xform(action_dim):
-  def xform_action(action_idx):
-    ret = np.array([0.0 for _ in range(action_dim)])
+class StatesProccessor:
+  def __init__(self, return_dim, proc_function):
+    self.return_dim = return_dim
+    self.proc = proc_function
+
+class ActionDecoder:
+  def __init__(self, actions):
+    self.actions = actions
+    self.action_dim = len(actions)
+
+  def action_to_onehot_array(self, a):
+    action_idx = self.actions.index(a)
+    ret = np.array([0.0 for _ in range(self.action_dim)])
     ret[action_idx] = 1.0
     return ret
-  return xform_action
+
+  def index_to_action(self, idx):
+    return self.actions[idx]    
 
 class StatelessAgent:
 
-  # pass in a xform function to transform the state into the vectors
-  def __init__(self, name, state_dim, action_dim, learning_rate = 0.001, num_hidden = 100,
-               epi = 0.1):
+  # all arguments are self explainatory...
+  # interface to the environment
+  #   states_processor takes in a prefix of the partially generated trace and
+  #   return a finite state representation
+  #   action decoder takes in an action index and return an action
+  def __init__(self, name, 
+               states_processer, action_decoder,
+               learning_rate = 0.001, num_hidden = 100, epi = 0.1):
     self.epi = epi
     self.name = name
-    self.state_dim = state_dim
-    self.action_dim = action_dim
-    self.xform_action = get_action_xform(action_dim)
+    self.states_processer = states_processer
+    self.action_decoder = action_decoder
+    self.state_dim = states_processer.return_dim
+    self.action_dim = action_decoder.action_dim
 
     self.graph = tf.Graph()
     self.session = tf.Session(graph = self.graph)
   
     with self.session.graph.as_default():
       # this is the input state
-      self.input_state = tf.placeholder(tf.float32, [None, state_dim])
+      self.input_state = tf.placeholder(tf.float32, [None, self.state_dim])
       # this is the roll-out-reward indexed by action on that particular state
       # used for training only
-      self.roll_out_reward = tf.placeholder(tf.float32, [None, action_dim])
+      self.roll_out_reward = tf.placeholder(tf.float32, [None, self.action_dim])
 
       # one layer of fc to predict the action
       self.hidden_state = tf.layers.dense(self.input_state, num_hidden, activation= tf.nn.relu)
 
       # predict the move
-      self.prediction = tf.layers.dense(self.hidden_state, action_dim)
+      self.prediction = tf.layers.dense(self.hidden_state, self.action_dim)
       self.pred_prob = tf.nn.softmax(self.prediction)
 
       # add a small number so it doesn't blow up (logp or in action selection)
@@ -95,6 +113,20 @@ class StatelessAgent:
     self.saver.restore(self.session, path)
     print "model restored  from ", path
 
+  # only supports 1 state at a time, no batching plz
+  # stocastic action, and some episilon for exploration
+  # act takes in all the trace prefix, but the processor likely only use the last state
+  def act(self, trace_prefix, show_prob=False):
+    inp = np.array([self.states_processer.proc(trace_prefix)])
+    the_action = self.session.run([self.pred_prob], {self.input_state: inp})[0][0]
+    if show_prob:
+      print "action prob ", the_action
+    move_idx = np.random.choice(range(self.action_dim), p=the_action)
+    if random.random() < self.epi:
+      move_idx = np.random.choice(range(self.action_dim))
+    return self.action_decoder.index_to_action(move_idx)
+    
+
   # Use this for behavioural cloning
   def learn_supervised(self, supervised_trace_batch):
     batch_states = []
@@ -119,14 +151,15 @@ class StatelessAgent:
     # trace_batch = normalize_trace_batch(trace_batch)
     batch_states = []
     batch_action_indexed_rewards = []
+
     for trace in trace_batch:
-      states =  [tr[0] for tr in trace]
+      states =  [self.states_processer.proc(trace[:i]) for i in range(len(trace))]
       actions = [tr[1] for tr in trace]
       disc_rewards = get_discount_future_reward(trace) 
       for s, a, r in zip(states, actions, disc_rewards):
         batch_states.append(s)
         # print r, a, self.xform_action(a)
-        batch_action_indexed_rewards.append(r * self.xform_action(a))
+        batch_action_indexed_rewards.append(r * self.action_decoder.action_to_onehot_array(a))
 
     if batch_states == []: return
 
@@ -136,53 +169,22 @@ class StatelessAgent:
     self.session.run([self.train], {self.input_state: batch_states,
                                     self.roll_out_reward: batch_action_indexed_rewards})
 
-  # only supports 1 state at a time, no batching plz
-  # stocastic action
-  def act(self, state, show_prob=False):
-    inp = np.array([state])
-    the_action = self.session.run([self.pred_prob], {self.input_state: inp})[0][0]
-    if show_prob:
-      print "action prob ", the_action
-    move_idx = np.random.choice(range(self.action_dim), p=the_action)
-    
-    if random.random() < self.epi:
-      return np.random.choice(range(self.action_dim))
-    return move_idx
-    
-class TraceGenerator:
+# takes in a states_processor, which takes in a ALL past set of observations/states
+# and output the state which the stateless agent can consume
+def generate_trace(env, agent, start_state=None, n=200, do_render=True):
+  env.reset() if start_state is None else env.restore_full_state(start_state)
+  cur_state = env._get_obs()
+  return_trace = []
+  for i in range(n):
+    action = agent.act(return_trace)
+    next_state, reward, done, comments = env.step(action)
+    if do_render:
+      env.render()
+    return_trace.append((cur_state, action, reward))
+    cur_state = next_state
+    if done: break
 
-  # takes in an environment
-  # and output the right state format that is to be consumed by the actor
-  def __init__(self, env, env_actions):
-    self.env = env
-    self.env_actions = env_actions
-    self.env.reset()
-  
-
-  def set_start_state(self, start_state):
-    self.env.reset()
-    self.env.restore_full_state(start_state)
-
-  # takes in a states_processor, which takes in a ALL past set of observations/states
-  # and output the state which the stateless agent can consume
-  def generate_trace(self, agent, states_processor, start_state=None, n=200, do_render=True):
-    self.env.reset()
-    if start_state is not None:
-      self.env.restore_full_state(start_state)
-
-    return_trace = []
-    past_states = []
-    for i in range(n):
-      cur_proc_state  = states_processor(past_states)
-      cur_action_id = agent.act(cur_proc_state)
-      next_state, reward, done, comments = self.env.step(self.env_actions[cur_action_id])
-      if do_render:
-        self.env.render()
-      return_trace.append((cur_proc_state, cur_action_id, reward))
-      past_states.append(next_state)
-      if done: break
-
-    return return_trace
+  return return_trace
 
 
     
