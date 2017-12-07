@@ -3,31 +3,67 @@ import gym.envs.atari
 import gym
 import random
 from subsample import *
-from utils import preprocess, get_random_pong_state
+from pong_utils import *
+from dagger import *
+
+class UpDownExpert:
+  def act(self, trace_prefix):
+    states = [tr[0] for tr in trace_prefix]
+    if len(states) < 2:
+      return random.choice([2,3])
+    _, ob2 = states[-1], states[-2]
+    ball = get_ball(ob2)
+    pad = get_our_paddle(ob2)
+    if ball is None:
+      return random.choice([2,3])
+    ball_y, pad_y = ball[1], pad[1]
+    return 2 if pad_y > ball_y else 3
+
+expert_dumbkoft = UpDownExpert()
+
 
 # take in a trace prefix and return the state (for the last 2 or somting liek that)
 def state_processor1(trace_prefix):
   states = [tr[0] for tr in trace_prefix]
   if len(states) < 2:
-    # return np.zeros([800+100*2])
-    return np.zeros([100*2])
+    return np.zeros([400])
 
   ob1, ob2 = preprocess(states[-1]), preprocess(states[-2])
+  if ob1 is None or ob2 is None:
+    return np.zeros([400])
+  else:
 
-  pad1 = ob1[:, 65:70]
-  pad2 = ob2[:, 65:70]
-  ob1, ob2 = dim_reduce(ob1, 3), dim_reduce(ob2, 3)
-  together = np.concatenate([ob1, ob2], axis=1)
-  
-  pad1_flat = np.reshape(pad1, [400])
-  pad2_flat = np.reshape(pad2, [400])
+    pad1, pad2 = padpad(ob1), padpad(ob2)
 
-  together_flat = np.reshape(together, [100*2])
-  together_with_prev = np.concatenate([together_flat, pad1_flat, pad2_flat])
-  # return together_with_prev
-  return together_flat
+    ob1, ob2 = dim_reduce(ob1, 3), dim_reduce(ob2, 3)
+    together = np.concatenate([ob1, ob2], axis=1)
 
-proc1 = StatesProccessor(200, state_processor1)
+    pad_diff = np.reshape(pad1 - pad2, [200])
+
+    together_flat = np.reshape(together, [100*2])
+    together = np.concatenate([together_flat, pad_diff])
+    return together
+#   states = [tr[0] for tr in trace_prefix]
+#   if len(states) < 2:
+#     # return np.zeros([800+100*2])
+#     return np.zeros([100*2])
+# 
+#   ob1, ob2 = preprocess(states[-1]), preprocess(states[-2])
+# 
+#   pad1 = ob1[:, 65:70]
+#   pad2 = ob2[:, 65:70]
+#   ob1, ob2 = dim_reduce(ob1, 3), dim_reduce(ob2, 3)
+#   together = np.concatenate([ob1, ob2], axis=1)
+#   
+#   pad1_flat = np.reshape(pad1, [400])
+#   pad2_flat = np.reshape(pad2, [400])
+# 
+#   together_flat = np.reshape(together, [100*2])
+#   together_with_prev = np.concatenate([together_flat, pad1_flat, pad2_flat])
+#   # return together_with_prev
+#   return together_flat
+
+proc1 = StatesProccessor(400, state_processor1)
 action_decoder = ActionDecoder([2,3])
 
 env = gym.envs.atari.atari_env.AtariEnv(obs_type='image', frameskip=2)
@@ -39,20 +75,16 @@ ctr = 0
 times_explore = 10
 while True:
   ctr += 1
-  do_render = True if ctr % 10 == 0 else False
-  print ctr, do_render
+  print ctr
+  if ctr % 10 == 0:
+    generate_trace(env, stateless_agent, 
+                   get_random_pong_state(env, start_state), n=1000, do_render=True)
 
   if ctr % 100 == 0:
     stateless_agent.save_model("models/pongpong.ckpt")
 
-  # train the discriminator
-#  planner_sa = [sample_planner_sa()]
-#  stateless_agent.learn_supervised(planner_sa)
-
-  # create a batch of trace in it
-  agent_trace_batch = [generate_trace(env, stateless_agent,
-                                                get_random_pong_state(env, start_state),
-                                                do_render = do_render)
+  agent_trace_batch = [generate_dagger_trace(env, stateless_agent, expert_dumbkoft,
+                                             get_random_pong_state(env, start_state))
                        for _ in range(times_explore)]
 
   for agr in agent_trace_batch:
@@ -61,8 +93,10 @@ while True:
       rewards += r
     print "explore trace reward ", rewards
 
-  stateless_agent.learn_policy_grad(agent_trace_batch)
+  # stateless_agent.learn_policy_grad(agent_trace_batch)
+  stateless_agent.learn_supervised(agent_trace_batch)
 
+    
   
 
   

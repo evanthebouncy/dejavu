@@ -131,12 +131,14 @@ class StatelessAgent:
   def learn_supervised(self, supervised_trace_batch):
     batch_states = []
     batch_action_indexed_rewards = []
+
     for trace in supervised_trace_batch:
-      states = [self.xform(tr[0]) for tr in trace]
+      # states = [self.xform(tr[0]) for tr in trace]
+      states =  [self.states_processer.proc(trace[:i]) for i in range(len(trace))]
       actions = [tr[1] for tr in trace]
       for s, a in zip(states, actions):
         batch_states.append(s)
-        batch_action_indexed_rewards.append(self.xform_action(a))
+        batch_action_indexed_rewards.append(self.action_decoder.action_to_onehot_array(a))
 
     if batch_states == []: return
 
@@ -169,23 +171,3 @@ class StatelessAgent:
     self.session.run([self.train], {self.input_state: batch_states,
                                     self.roll_out_reward: batch_action_indexed_rewards})
 
-# takes in a states_processor, which takes in a ALL past set of observations/states
-# and output the state which the stateless agent can consume
-def generate_trace(env, agent, start_state=None, n=200, do_render=True):
-  env.reset() if start_state is None else env.restore_full_state(start_state)
-  cur_state = env._get_obs()
-  return_trace = []
-  for i in range(n):
-    action = agent.act(return_trace)
-    next_state, reward, done, comments = env.step(action)
-    if do_render:
-      env.render()
-    return_trace.append((cur_state, action, reward))
-    cur_state = next_state
-    if done: break
-
-  return return_trace
-
-
-    
-  
