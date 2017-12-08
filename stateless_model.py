@@ -116,8 +116,8 @@ class StatelessAgent:
   # only supports 1 state at a time, no batching plz
   # stocastic action, and some episilon for exploration
   # act takes in all the trace prefix, but the processor likely only use the last state
-  def act(self, trace_prefix, show_prob=False):
-    inp = np.array([self.states_processer.proc(trace_prefix)])
+  def act(self, trace_prefix, cur_state, show_prob=False):
+    inp = np.array([self.states_processer.proc(trace_prefix, cur_state)])
     the_action = self.session.run([self.pred_prob], {self.input_state: inp})[0][0]
     if show_prob:
       print "action prob ", the_action
@@ -133,8 +133,8 @@ class StatelessAgent:
     batch_action_indexed_rewards = []
 
     for trace in supervised_trace_batch:
-      # states = [self.xform(tr[0]) for tr in trace]
-      states =  [self.states_processer.proc(trace[:i]) for i in range(len(trace))]
+      trace_prefix = [trace[:i-1] if i > 0 else [] for i in range(len(trace))]
+      states =  [self.states_processer.proc(trace_prefix[i], trace[i][0]) for i in range(len(trace))]
       actions = [tr[1] for tr in trace]
       for s, a in zip(states, actions):
         batch_states.append(s)

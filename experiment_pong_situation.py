@@ -6,6 +6,9 @@ from subsample import *
 from pong_utils import *
 from dagger import *
 
+# pong but with situation, i.e. it is given as facts by pre-process
+# into which situation it is
+
 class UpDownExpert:
   def act(self, trace_prefix, state):
 #    states = [tr[0] for tr in trace_prefix]
@@ -31,41 +34,48 @@ expert_dumbkoft = UpDownExpert()
 
 # take in a trace prefix and return the state (for the last 2 or somting liek that)
 def state_processor1(trace_prefix, cur_state):
-  states = [tr[0] for tr in trace_prefix]
-  if len(states) < 1:
-    return np.zeros([400])
+  px, py = get_our_paddle(cur_state)
+  bx, by = get_ball(cur_state) if get_ball(cur_state) is not None else (None, None)
 
-  ob1, ob2 = preprocess(cur_state), preprocess(states[-1])
-  if ob1 is None or ob2 is None:
-    return np.zeros([400])
-  else:
+  if len(trace_prefix) < 1:
+    return np.array([1.0, 0.0, 0.0, 0.0, 0.0])
 
-    pad1, pad2 = padpad(ob1), padpad(ob2)
+  def ball_pad_state():
+    # no ball
+    if bx is None:
+      return [1.0, 0.0, 0.0, 0.0]
+    # situation 2, ball looks good
+    if abs(by - py) < 3:
+      return [0.0, 1.0, 0.0, 0.0]
+    # situation 3, ball above
+    if by < py:
+      return [0.0, 0.0, 1.0, 0.0]
+    # situation 4, ball below
+    if by > py:
+      return [0.0, 0.0, 0.0, 1.0]
 
-    ob1, ob2 = dim_reduce(ob1, 3), dim_reduce(ob2, 3)
-    together = np.concatenate([ob1, ob2], axis=1)
+  last_move = trace_prefix[-1][1]
+  if last_move == 2: return np.array([0.0] + ball_pad_state())
+  if last_move == 3: return np.array([1.0] + ball_pad_state())
 
-    pad_diff = np.reshape(pad1 - pad2, [200])
+  assert 0 
+  
 
-    together_flat = np.reshape(together, [100*2])
-    together = np.concatenate([together_flat, pad_diff])
-    return together
-
-proc1 = StatesProccessor(400, state_processor1)
+proc1 = StatesProccessor(5, state_processor1)
 action_decoder = ActionDecoder([2,3])
 
 env = gym.envs.atari.atari_env.AtariEnv(obs_type='image', frameskip=2)
 start_state = env.clone_full_state()
 
-stateless_agent = StatelessAgent("bob",proc1, action_decoder)
+stateless_agent = StatelessAgent("bob",proc1, action_decoder, num_hidden=10)
 
 agg = Aggregater(400)
 
 ctr = 0
 times_explore = 10
 
-generate_trace(env, expert_dumbkoft, 
-               get_random_pong_state(env, start_state), n=1000, do_render=True)
+# generate_trace(env, expert_dumbkoft, 
+#                get_random_pong_state(env, start_state), n=1000, do_render=True)
 while True:
   ctr += 1
   print ctr
@@ -74,7 +84,7 @@ while True:
                    get_random_pong_state(env, start_state), n=1000, do_render=True)
 
   if ctr % 100 == 0:
-    stateless_agent.save_model("models/pongpong.ckpt")
+    stateless_agent.save_model("models/pongpong_situation.ckpt")
 
   for _ in range(10):
     agg.add_new_trace(env, stateless_agent, expert_dumbkoft, 

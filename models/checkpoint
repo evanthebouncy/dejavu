@@ -1,0 +1,2 @@
+model_checkpoint_path: "pongpong_det.ckpt"
+all_model_checkpoint_paths: "pongpong_det.ckpt"
